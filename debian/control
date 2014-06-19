@@ -1,0 +1,21 @@
+Source: oracle-client-package
+Section: contrib/misc
+Priority: optional
+Maintainer: Sergey Kryazhevskikh <soliverr@gmail.com>
+Build-Depends: debhelper (>= 7)
+Standards-Version: 3.8.1
+
+Package: oracle-client-package
+Architecture: all
+Depends: ${misc:Depends}, bzip2, devscripts, fakeroot, file, unzip, tofrodos, sudo, cpio, oracle-base
+Description: Oracle client Debian package builder
+ This utility makes it possible to build a Debian package of Oracle
+ client. The Oracle Client program is governed by the copyright holder 
+ (Oracle USA, Inc.), so you may be limited as to what you can do with
+ the resulting package (i.e. no redistribution, etc). This utility will simply
+ help you create the Debian package, it is your responsibility to use the
+ resulting package acordingly with the OTN license, a copy of which is included
+ in the created package, that you must agree on when downloading the source.
+ .
+ This utility will require you to download the architecture dependent archive
+ from <http://www.oracle.com/> to create the Debian package from.

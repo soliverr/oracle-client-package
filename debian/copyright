@@ -1,0 +1,33 @@
+This package was debianized by Sergey Kryazhevskikh <soliverr@gmail.com> on
+Thu, 19 Jun 2014 10:40:22 +0600.
+
+This package is not part of the Debian GNU/Linux distribution. It falls into
+category 2.2.2 of the Debian Policy Manual ("wrapper packages or other sorts
+of free accessories for non-free programs.").
+
+Copyright:
+
+    Copyright © 2014 Sergey Kryazhevskikh <soliverr@gmail.com>
+
+License:
+
+    This package is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    This package is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this package; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+
+On Debian systems, the complete text of the GNU General Public License version
+3, can be found in `/usr/share/common-licenses/GPL-3'.
+
+The Debian packaging is © 2014, Sergey Kryazhevskikh <soliverr@gmail.com>
+and is licensed under the GPL either version 3 of the License, or (at your
+option) any later version, see above.
