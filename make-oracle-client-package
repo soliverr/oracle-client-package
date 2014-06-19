@@ -26,8 +26,10 @@ FAKEROOT=fakeroot
 UPVER=
 ARCHIVE=
 ORA_VER=
+ORA_LANG="en"
 ORA_NAME=
 ORA_HOME="/opt/oracle/product/client"
+ORA_BASE="/var/log/oracle/client"
 ORA_ETC="/etc/oracle"
 ORA_INV_LOC="$ORA_ETC/oraInventory"
 ORA_PTR_LOC="$ORA_ETC/oraInventory.loc"
@@ -153,11 +155,12 @@ func_extract() {
     orabase_info "Extract source file $ARCHIVE to build directory ..."
 
     if [[ "$ARCHIVE" =~ .*\.cpio\.gz ]] ; then
-        gunzip --to-stdout  "$ARCHIVE" | cpio --extract --make-directories || orabase_error_exit "Error while extract sources, terminating ..."
+        cd "$BUILD_DIR" && gunzip --to-stdout  "$ARCHIVE" | cpio --extract --make-directories || orabase_error_exit "Error while extract sources, terminating ..."
+    elif [[ "$ARCHIVE" =~ .*\.zip ]] ; then
+        unzip "$ARCHIVE" -d $BUILD_DIR 1>/dev/null
     fi
 
     orabase_info "Archive extracted"
-
 }
 
 #
@@ -176,6 +179,7 @@ func_getversion() {
     orabase_info "Found Oracle client version $ORA_VER"
 
     ORA_HOME=$ORA_HOME/$ORA_VER
+    ORA_BASE=$ORA_BASE/$ORA_VER
 
     orabase_info "Set ORACLE_HOME path to $ORA_HOME"
 }
@@ -184,11 +188,12 @@ func_getversion() {
 # Prepare installer response files
 #
 func_makeresp() {
+    rm -f $BUILD_DIR/*.rsp
+
     if [[ "$ORA_VER" =~ 10.* ]] ; then
-        rm -f $BUILD_DIR/*.rsp
         for rsp in instantClient.rsp clientruntime.rsp clientadmin.rsp ; do
             orabase_info "Create response file for $rsp ..."
-            rfile=`find $BUILD_DIR -type f -name "$rsp" -print0 | xargs -0 echo`
+            rfile=`find $BUILD_DIR -type f -name "$rsp" -print0 | xargs -0 -I {} echo {} 2>&- | head -1`
             if [ -z "$rfile" ] ; then
                 orabase_warn "Can't find response file $rsp, skiping..."
                 continue
@@ -199,6 +204,25 @@ func_makeresp() {
                 -e "s#^ORACLE_HOME=.*#ORACLE_HOME=$ORA_HOME#" \
                 -e "s#^ORACLE_HOME_NAME=.*#ORACLE_HOME_NAME=Ora10g_$rsp#" $rfile > "$BUILD_DIR/$rsp.rsp"
         done
+    elif [[ "$ORA_VER" =~ 11.* ]] ; then
+        rfile=`find $BUILD_DIR -type f -name client_install.rsp -print0 | xargs -0 -I {} echo {} 2>&- | head -1`
+        [ -z "$rfile" ] && orabase_error_exit "Can't find response file client_install.rsp, terminating..."
+        for rsp in InstantClient Runtime Administrator ; do
+            cp $rfile "$BUILD_DIR"/$rsp.rsp
+            if [ $? -ne 0 ] ; then 
+                orabase_error "Can't create $rsp.rsp response file"
+                continue
+            fi
+
+            sed -e "s#^UNIX_GROUP_NAME=.*#UNIX_GROUP_NAME=oinstall#" \
+                -e "s#^ORACLE_HOME=.*#ORACLE_HOME=$ORA_HOME#" \
+                -e "s#^ORACLE_BASE=.*#ORACLE_BASE=$ORA_BASE#" \
+                -e "s#^INVENTORY_LOCATION=.*#INVENTORY_LOCATION=$ORA_INV_LOC#" \
+                -e "s#^ORACLE_HOSTNAME=.*#ORACLE_HOSTNAME=`hostname --fqdn`#" \
+                -e "s#^SELECTED_LANGUAGES=.*#SELECTED_LANGUAGES=$ORA_LANG#" \
+                -e "s#^oracle\.install\.client\.installType=.*#oracle\.install\.client\.installType=$rsp#" \
+                -e "s#^oracle\.install\.client\.customComponents=.*#oracle\.install\.client\.customComponents=#" $rfile > "$BUILD_DIR/$rsp.rsp"
+        done
     fi
 }
 
@@ -208,6 +232,8 @@ func_makeresp() {
 func_inventory() {
     orabase_info "Creating inventory location ..."
     
+    rm -rf "$BUILD_DIR$ORA_ETC"
+
     mkdir -p "$BUILD_DIR/$ORA_INV_LOC"
 
 
@@ -222,17 +248,25 @@ _EOF_
 # Install Oracle client software
 #
 func_install() {
-    local dst tgt
+    local dst tgt rI rI_opt
 
     # Set permision for Oracle Installer
     #chmod a+rwx -R $BUILD_DIR
 
-    rI=`find $BUILD_DIR -type f -name "runInstaller" -print0 | xargs -0 echo`
+    rI=`find $BUILD_DIR -type f -name "runInstaller" -print0 | xargs -0 -I {} echo {} 2>&- | head -1`
     [ -z "$rI" ] && orabase_error_exit "Can't find runInstaller execution file, terminating..."
 
-    for f in `ls -1 "$BUILD_DIR"/*.rsp` ; do
+    for f in `ls -1 "$BUILD_DIR"/*.rsp 2>&-` ; do
         orabase_info "Installing Oracle client for $f ..."
-        $rI -silent -nobackground -waitforcompletion -ignoreSysPrereqs -invPtrLoc "$BUILD_DIR/$ORA_PTR_LOC" -responseFile "$f"
+        if [[ "$ORA_VER" =~ 10.* ]] ; then
+            rI_opt="-nobackground"
+         elif [[ "$ORA_VER" =~ 11.* ]] ; then
+            rI_opt="-ignorePrereq"
+        else
+            rI_opt=
+        fi
+        echo $rI -silent -waitforcompletion -ignoreSysPrereqs -invPtrLoc "$BUILD_DIR/$ORA_PTR_LOC" -responseFile "$f" $rI_opt
+        $rI -silent -waitforcompletion -ignoreSysPrereqs -invPtrLoc "$BUILD_DIR/$ORA_PTR_LOC" -responseFile "$f" $rI_opt
         rc=$?
         if [ $rc -ne 0 ] ; then
             orabase_error "Error installing Oracle instant client software"
@@ -240,16 +274,18 @@ func_install() {
         fi
         
         # There is a bug with sqlpus linking
-        sed --in-place '/^LINKLDLIBS=/i EXPDLIBS=-lclntsh' $ORA_HOME/sqlplus/lib/env_sqlplus.mk
-        ORACLE_HOME=$ORA_HOME $ORA_HOME/bin/relink utilities
+        if [ -f $ORA_HOME/sqlplus/lib/env_sqlplus.mk ] ; then
+            sed --in-place '/^LINKLDLIBS=/i EXPDLIBS=-lclntsh' $ORA_HOME/sqlplus/lib/env_sqlplus.mk
+            ORACLE_HOME=$ORA_HOME $ORA_HOME/bin/relink utilities
+        fi
         
         # Set permision to build Debian package
         #$SUDO chmod a+rwx -R $BUILD_DIR
 
         case "$f" in
-            *instantClient.rsp) tgt="$BUILD_DIR"/oracle-client-instant; dst="$tgt"/debian/oracle-client-instant/$ORA_HOME ;;
-            *clientruntime.rsp) tgt="$BUILD_DIR"/oracle-client-runtime; dst="$tgt"/debian/oracle-client-runtime/$ORA_HOME ;;
-            *clientadmin.rsp) tgt="$BUILD_DIR"/oracle-client-admin; dst="$tgt"/debian/oracle-client-admin/$ORA_HOME ;;
+            *instantClient.rsp|*InstantClient.rsp) tgt="$BUILD_DIR"/oracle-client-instant; dst="$tgt"/debian/oracle-client-instant/$ORA_HOME ;;
+            *clientruntime.rsp|*Runtime.rsp) tgt="$BUILD_DIR"/oracle-client-runtime; dst="$tgt"/debian/oracle-client-runtime/$ORA_HOME ;;
+            *clientadmin.rsp|*Administrator.rsp) tgt="$BUILD_DIR"/oracle-client-admin; dst="$tgt"/debian/oracle-client-admin/$ORA_HOME ;;
             *) orabase_error_exit "Not supported package for this client installation: $f" ;;
         esac
 
@@ -257,7 +293,7 @@ func_install() {
         rm -rf "$dst"
         mkdir -p  "`dirname "$dst"`"
         mv "$ORA_HOME" "`dirname "$dst"`"
-        
+
         # Copy response file
         cp "$f" "$tgt"/$ORA_RSP_FILE
 
@@ -285,6 +321,8 @@ func_debianize() {
         esac
 
         ORA_NAME=`sed -n -e 's/^ORACLE_HOME_NAME=\(.*\)/\1/p' "$DEBIAN_WORKDIR"/../$ORA_RSP_FILE`
+        [ -z "$ORA_NAME" ] && ORA_NAME="${ld_name}_client_`echo $ORA_VER | cut -d '.' -f 1`"
+
 
         # Create conffiles
         cat << __EOFF__ > "$DEBIAN_WORKDIR"/conffiles
@@ -606,39 +644,58 @@ func_clean_oracle_home() {
 
     [ -d "$ora_home" ] || return 1
 
+    # Create bin directory if not exists and move exetution files there (Oracle instant client)
+    if [ ! -d "$ora_home"/bin ] ; then
+        mkdir "$ora_home"/bin
+        find "$ora_home" -maxdepth 1 -type f -perm /111 -exec mv {} "$ora_home"/bin ';'
+    fi
+
     #
-    rm -fv $ora_home/root.sh.old*
+    rm -fv "$ora_home"/root.sh.old*
     #
-    find $ora_home/bin -type f '(' -name '*O' -o -name '*0' -o -name '*bak' -o -size 0 ')' -exec rm -fv {} ';'
-    rm -f $ora_home/bin/extjobo
-    find $ora_home/ctx/bin -type f '(' -name '*O' -o -name '*0' -o -name '*bak' ')' -exec rm -fv {} ';'
-    find $ora_home/install -type f '(' -name '*.log' -o -name '*bak' ')' -exec rm -fv {} ';'
+    find "$ora_home"/bin -type f '(' -name '*O' -o -name '*0' -o -name '*bak' -o -size 0 ')' -exec rm -fv {} ';'
+    rm -f "$ora_home"/bin/extjobo
+    find "$ora_home"/ctx/bin -type f '(' -name '*O' -o -name '*0' -o -name '*bak' ')' -exec rm -fv {} ';'
+    find "$ora_home"/install -type f '(' -name '*.log' -o -name '*bak' ')' -exec rm -fv {} ';'
     #
-    find  $ora_home/cfgtoollogs -type f -name '*bak*' -exec rm -fv {} ';'
+    find  "$ora_home"/cfgtoollogs -type f -name '*bak*' -exec rm -fv {} ';'
     # 
-    find $ora_home/lib -type f  -size 0 -exec rm -fv {} ';'
-    find $ora_home/lib -type f  '(' -name '*.tmp' -o -name '*so0' -o -name '*O' ')' -exec rm -fv {} ';'
-    find $ora_home/lib32 -type f  -size 0 -exec rm -fv {} ';'
-    find $ora_home/lib32 -type f  '(' -name '*.tmp' -o -name '*so0' -o -name '*O' ')' -exec rm -fv {} ';'
+    find "$ora_home"/lib -type f  -size 0 -exec rm -fv {} ';'
+    find "$ora_home"/lib -type f  '(' -name '*.tmp' -o -name '*so0' -o -name '*O' ')' -exec rm -fv {} ';'
+    find "$ora_home"/lib32 -type f  -size 0 -exec rm -fv {} ';'
+    find "$ora_home"/lib32 -type f  '(' -name '*.tmp' -o -name '*so0' -o -name '*O' ')' -exec rm -fv {} ';'
     #
-    find $ora_home/srvm/admin -type f  -name '*0' -exec rm -fv {} ';'
+    find "$ora_home"/srvm/admin -type f  -name '*0' -exec rm -fv {} ';'
     #
-    find $ora_home/opmn/conf -type f '(' -name '*tmp' -o -name '*backup*' ')' -exec rm -fv {} ';'
+    find "$ora_home"/opmn/conf -type f '(' -name '*tmp' -o -name '*backup*' ')' -exec rm -fv {} ';'
     #
-    rm -rf $ora_home/ccr/hosts/*
+    rm -rf "$ora_home"/ccr/hosts/*
     #
     # - /sbin/ldconfig: if libexpat.so.0 is not a symbolic link
-    if [ ! -h $ora_home/lib/libexpat.so.0 ] ; then
-        rm -f $ora_home/lib/libexpat.so.0
-        rm -f $ora_home/lib/libexpat.so
-        if [ -f $ora_home/lib/libexpat.so.0.5.0 ] ; then
-            ln -s ./libexpat.so.0.5.0 $ora_home/lib/libexpat.so.0
-            ln -s ./libexpat.so.0 $ora_home/lib/libexpat.so
+    if [ ! -h "$ora_home"/lib/libexpat.so.0 ] ; then
+        rm -f "$ora_home"/lib/libexpat.so.1
+        rm -f "$ora_home"/lib/libexpat.so.0
+        rm -f "$ora_home"/lib/libexpat.so
+        if [ -f "$ora_home"/lib/libexpat.so.0.5.0 ] ; then
+            ln -s ./libexpat.so.0.5.0 "$ora_home"/lib/libexpat.so.0
+            ln -s ./libexpat.so.0 "$ora_home"/lib/libexpat.so
+        elif [ -f "$ora_home"/lib/libexpat.so.1.5.2 ] ; then
+            ln -s ./libexpat.so.1.5.2 "$ora_home"/lib/libexpat.so.1
+            ln -s ./libexpat.so.1 "$ora_home"/lib/libexpat.so
+        fi
+    fi
+    # - /sbin/ldconfig: if libexpat.so.1 is not a symbolic link
+    if [ ! -h "$ora_home"/lib/libexpat.so.1 ] ; then
+        rm -f "$ora_home"/lib/libexpat.so.1
+        rm -f "$ora_home"/lib/libexpat.so
+        if [ -f "$ora_home"/lib/libexpat.so.1.5.2 ] ; then
+            ln -s ./libexpat.so.1.5.2 "$ora_home"/lib/libexpat.so.1
+            ln -s ./libexpat.so.1 "$ora_home"/lib/libexpat.so
         fi
     fi
     # - make absolute path as relative path
-    local lib=$(ls -l $ora_home/lib/libclntsh.so 2>&- | sed -e 's/.*> \(.\+\)/\1/')
-    [[ $lib =~ $ORA_HOME ]] && ln -sf ./`basename $lib` $ora_home/lib/libclntsh.so
+    local lib=$(ls -l "$ora_home"/lib/libclntsh.so 2>&- | sed -e 's/.*> \(.\+\)/\1/')
+    [[ $lib =~ $ORA_HOME ]] && ln -sf ./`basename $lib` "$ora_home"/lib/libclntsh.so
 
     return 0
 }
@@ -661,58 +718,58 @@ func_set_permissions() {
     [ -d "$ora_home" ] || return 1
 
     # Set defaults except bin/
-    find $ora_home -type d -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 755 {} ';'
-    find $ora_home -type f -not -iwholename "$ora_home/bin/*" -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 644 {} ';'
+    find "$ora_home" -type d -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 755 {} ';'
+    find "$ora_home" -type f -not -iwholename "$ora_home/bin/*" -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 644 {} ';'
 
     # oraInventory
-    find $ora_home/inventory -type d -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 750 {} ';'
-    find $ora_home/inventory -type f -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 640 {} ';'
-    chmod 640  $ora_home/oraInst.loc
+    find "$ora_home"/inventory -type d -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 750 {} ';'
+    find "$ora_home"/inventory -type f -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 640 {} ';'
+    chmod 640  "$ora_home"/oraInst.loc
 
     # Perl
-    find $ora_home/perl -type d -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 750 {} ';'
-    find $ora_home/perl -type f -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 640 {} ';'
-    find $ora_home/perl -type f -iwholename '*/bin/*' -exec chmod 750 {} ';'
+    find "$ora_home"/perl -type d -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 750 {} ';'
+    find "$ora_home"/perl -type f -exec chown $ORACLE_USER:$ORACLE_GROUP {} ';' -exec chmod 640 {} ';'
+    find "$ora_home"/perl -type f -iwholename '*/bin/*' -exec chmod 750 {} ';'
 
     # Set executions for subdirs
     # - root.sh
-    chmod 750  $ora_home/root*.sh
+    chmod 750  "$ora_home"/root*.sh
     # -ccr
-    _set_exec_for_scripts $ora_home/ccr/bin
-    chmod 755  $ora_home/ccr/bin/nmz*
-    _set_exec_for_scripts $ora_home/ccr/admin/scripts
-    chmod 755 $ora_home/ccr/engines/Linux/perl/bin/*
-    _set_exec_for_scripts $ora_home/ccr/lib
-    _set_exec_for_scripts $ora_home/ccr/sysman/admin/scripts
+    _set_exec_for_scripts "$ora_home"/ccr/bin
+    chmod 755  "$ora_home"/ccr/bin/nmz*
+    _set_exec_for_scripts "$ora_home"/ccr/admin/scripts
+    chmod 755 "$ora_home"/ccr/engines/Linux/perl/bin/*
+    _set_exec_for_scripts "$ora_home"/ccr/lib
+    _set_exec_for_scripts "$ora_home"/ccr/sysman/admin/scripts
     # - clone
-    _set_exec_for_scripts $ora_home/clone/bin
+    _set_exec_for_scripts "$ora_home"/clone/bin
     # - crs
-    _set_exec_for_scripts $ora_home/crs/public
+    _set_exec_for_scripts "$ora_home"/crs/public
     # - css
-    _set_exec_for_scripts $ora_home/css/admin/
+    _set_exec_for_scripts "$ora_home"/css/admin/
     # - ctx
-    chmod 755 $ora_home/ctx/bin/*
+    chmod 755 "$ora_home"/ctx/bin/*
     # -install 
-    _set_exec_for_scripts $ora_home/install
+    _set_exec_for_scripts "$ora_home"/install
     # -jdbc
-    _set_exec_for_scripts $ora_home/jdbc
+    _set_exec_for_scripts "$ora_home"/jdbc
     # -jdk
-    chmod 755 $ora_home/jdk/bin/*
-    chmod 755 $ora_home/jdk/jre/bin/*
+    chmod 755 "$ora_home"/jdk/bin/*
+    chmod 755 "$ora_home"/jdk/jre/bin/*
     # -jre
-    chmod 755 $ora_home/jre/1.4.2/bin/*
+    chmod 755 "$ora_home"/jre/1.4.2/bin/*
     # - network
-    chmod 700 $ora_home/network/install/sqlnet/setowner.sh
+    chmod 700 "$ora_home"/network/install/sqlnet/setowner.sh
     # - oc4j
-    chmod 755 $ora_home/oc4j/bin/*
+    chmod 755 "$ora_home"/oc4j/bin/*
     # - odbc
-    chmod 755 $ora_home/odbc/utl/*
+    chmod 755 "$ora_home"/odbc/utl/*
     # - opnm
-    chmod 755 $ora_home/opmn/bin/*
+    chmod 755 "$ora_home"/opmn/bin/*
     # - oui
-    chmod 755 $ora_home/oui/bin/*
+    chmod 755 "$ora_home"/oui/bin/*
     # - sysman
-    _set_exec_for_scripts $ora_home/sysman/admin/scripts
+    _set_exec_for_scripts "$ora_home"/sysman/admin/scripts
 
     return 0
 }
@@ -767,7 +824,7 @@ if [ -z "$TERM" -o "$TERM" = "dumb" ]; then
    export ORABASE_QUIET="TRUE"
 fi
 
-[ $(id --user --name ) != "oracle" ] && orabase_error_exit "Please, run this script as user \`oracle'"
+#[ $(id --user --name ) != "oracle" ] && orabase_error_exit "Please, run this script as user \`oracle'"
 
 if [ $# -eq 0 ] ; then
    usage
@@ -809,13 +866,9 @@ fi
 
 # Do job
 #
-func_workdir
+#func_workdir
 
-# Change working directory
-#
-cd "$BUILD_DIR"
-
-func_extract
+#func_extract
 func_getversion
 func_makeresp
 func_inventory
