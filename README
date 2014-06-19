@@ -1,0 +1,25 @@
+The Debian Package oracle-client-package
+----------------------------------------
+
+You need to configure `sudo' to run this script. Add this line to /etc/sudoders file:
+
+  oracle  ALL=(ALL) NOPASSWD: /usr/bin/debuild, /bin/chown
+
+
+You should download Oracle client software from official Oracle download site by yourself.
+
+This script will run Oracle Universal Installer. Software wil be placed in real directory,
+becose Oracle add value of ORACLE_HOME environment variable in many scripts and linked programs.
+
+You can change target for ORACLE_HOME with a `--oracle-home-dir' argument.
+
+There is no additional patching of installed Oracle software. This script take an ORACLE_HOME 
+catalog and make an archive in Debian way (deb-package).
+
+Run this script as user `oracle':
+
+  sudo -H -u oracle make-oracle-client-package Oracle_Client_Distribution_Archive_File
+
+deb-packages will be placed in user's `oracle' HOME directory.
+
+ -- Kryazhevskikh Sergey <soliverr@gmail.com>
