@@ -1,9 +1,22 @@
 The Debian Package oracle-client-package
 ----------------------------------------
 
+This script helps to build Debian package for Oracle client 10g, 11g.
+
+
+SUDOERS configuration
+~~~~~~~~~~~~~~~~~~~~~
+
 You need to configure `sudo' to run this script. Add this line to /etc/sudoders file:
 
   oracle  ALL=(ALL) NOPASSWD: /usr/bin/debuild, /bin/chown
+
+
+Installation of Oracle client 11g
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Here (http://www.makina-corpus.org/blog/howto-install-oracle-11g-ubuntu-linux-1204-precise-pangolin-64bits) is usefull instructions
+to compile Oracle client 11g on Ubuntu Linux 12.04 (Precise Pangolin) 64bits.
 
 Install additional packages:
 
@@ -55,7 +68,7 @@ Install additional packages:
 I guess not all of this packages are mandatory for Oracle client. But OUI checks this packages and report errors, 
 that we can successfully ignore :-)
 
-Create following symlinks:
+Create following symlinks (it is mandatory step):
 
   sudo ln -s /bin/bash /bin/sh
   sudo ln -s /usr/bin/awk /bin/awk
@@ -66,7 +79,20 @@ Create following symlinks:
   cd /lib64 && sudo ln -s /lib/x86_64-linux-gnu/libgcc_s.so.1 .
 
 
+Sources of Oracle client software
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Oracle client 10g is not mantained by Oracle any more and no longer available for download.
+
+Oracle client 11g:
+  http://www.oracle.com/technetwork/database/enterprise-edition/downloads/112010-linx8664soft-100572.html
+
+
 You should download Oracle client software from official Oracle download site by yourself.
+
+
+Building packages
+~~~~~~~~~~~~~~~~~
 
 This script will run Oracle Universal Installer. Software wil be placed in real directory,
 becose Oracle add value of ORACLE_HOME environment variable in many scripts and linked programs.
@@ -76,10 +102,15 @@ You can change target for ORACLE_HOME with a `--oracle-home-dir' argument.
 There is no additional patching of installed Oracle software. This script take an ORACLE_HOME 
 catalog and make an archive in Debian way (deb-package).
 
+
+Usage
+~~~~~
+
 Run this script as user `oracle':
 
   sudo -H -u oracle make-oracle-client-package Oracle_Client_Distribution_Archive_File
 
 deb-packages will be placed in user's `oracle' HOME directory.
 
- -- Kryazhevskikh Sergey <soliverr@gmail.com>
+
+ -- Kryazhevskikh Sergey <soliverr@gmail.com>  Fri, 20 Jun 2014 09:48:50 +0600
